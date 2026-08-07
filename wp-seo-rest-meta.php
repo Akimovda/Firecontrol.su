@@ -1,0 +1,46 @@
+<?php
+/**
+ * Plugin Name: SEO Meta для REST API (Yoast / Rank Math)
+ * Description: Регистрирует SEO мета-поля Yoast и Rank Math так, чтобы их можно
+ *              было писать через WordPress REST API (например, скриптом wp_publish.py).
+ * Version: 1.0
+ *
+ * УСТАНОВКА:
+ *   Положите этот файл в папку  wp-content/mu-plugins/
+ *   (если папки mu-plugins нет — создайте её). Активация не требуется:
+ *   must-use плагины подключаются автоматически.
+ *
+ * БЕЗОПАСНОСТЬ:
+ *   auth_callback разрешает запись только пользователям с правом edit_posts,
+ *   то есть авторам/редакторам/администраторам. Обычные читатели писать не смогут.
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit; // защита от прямого вызова
+}
+
+add_action( 'init', function () {
+
+    $auth = function () {
+        return current_user_can( 'edit_posts' );
+    };
+
+    $register = function ( $key ) use ( $auth ) {
+        register_post_meta( 'post', $key, array(
+            'type'          => 'string',
+            'single'        => true,
+            'show_in_rest'  => true,
+            'auth_callback' => $auth,
+        ) );
+    };
+
+    // Yoast SEO
+    $register( '_yoast_wpseo_title' );
+    $register( '_yoast_wpseo_metadesc' );
+    $register( '_yoast_wpseo_focuskw' );
+
+    // Rank Math
+    $register( 'rank_math_title' );
+    $register( 'rank_math_description' );
+    $register( 'rank_math_focus_keyword' );
+} );
