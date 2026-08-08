@@ -26,12 +26,14 @@ add_action( 'init', function () {
     };
 
     $register = function ( $key ) use ( $auth ) {
-        register_post_meta( 'post', $key, array(
-            'type'          => 'string',
-            'single'        => true,
-            'show_in_rest'  => true,
-            'auth_callback' => $auth,
-        ) );
+        foreach ( array( 'post', 'page' ) as $post_type ) {
+            register_post_meta( $post_type, $key, array(
+                'type'          => 'string',
+                'single'        => true,
+                'show_in_rest'  => true,
+                'auth_callback' => $auth,
+            ) );
+        }
     };
 
     // Yoast SEO
