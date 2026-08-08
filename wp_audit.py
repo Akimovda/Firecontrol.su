@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-wp_audit.py — SEO-аудит опубликованных постов WordPress через REST API.
+wp_audit.py — SEO-аудит опубликованных постов И страниц WordPress через REST API.
 
-Проверяет по каждому посту:
+Проверяет по каждому посту/странице:
   - длину контента (тонкий контент — меньше --min-words слов, по умолчанию 800)
   - заполнены ли SEO title / description (Yoast или Rank Math — оба мета-поля читаются
     напрямую из post.meta, туда их пишет mu-плагин wp-seo-rest-meta.php)
+  - НЕ содержит ли SEO title необработанные Yoast-шаблонные теги вида %%title%% —
+    реальный баг, найденный на 5 страницах сайта: Yoast подставляет их как есть,
+    если исходный шаблон в настройках не был заполнен для этого типа записи
   - установлена ли обложка (featured image) и есть ли у неё alt
   - есть ли alt у всех картинок в теле контента
-  - структуру заголовков: заголовок поста — это единственный H1 страницы, поэтому
+  - структуру заголовков: заголовок поста/страницы — это единственный H1, поэтому
     лишний <h1> внутри контента считается дублем H1; отдельно проверяется наличие H2
 
 Каждой проблеме назначен вес, по сумме весов считается приоритет — что чинить первым.
@@ -18,6 +21,7 @@ wp_audit.py — SEO-аудит опубликованных постов WordPre
 
 Примеры:
   python3 wp_audit.py
+  python3 wp_audit.py --types posts,pages
   python3 wp_audit.py --min-words 1000 --top 15
   python3 wp_audit.py --json reports/audit.json --csv reports/audit.csv
 """
@@ -46,6 +50,7 @@ SEO_META_KEYS = {
 ISSUE_WEIGHTS = {
     "thin_content": 3,
     "no_seo_title": 3,
+    "broken_seo_title": 3,
     "no_seo_desc": 2,
     "no_featured": 2,
     "featured_no_alt": 1,
@@ -62,28 +67,28 @@ def env(name):
     return val
 
 
-def fetch_all_posts(session, base, status):
-    posts = []
+def fetch_all(session, base, post_type, status):
+    items = []
     page = 1
     while True:
         r = session.get(
-            f"{base}/wp-json/wp/v2/posts",
+            f"{base}/wp-json/wp/v2/{post_type}",
             params={"status": status, "per_page": PER_PAGE, "page": page, "_embed": 1},
             timeout=TIMEOUT,
         )
         if r.status_code == 400 and page > 1:
             break
         if r.status_code >= 400:
-            sys.exit(f"[ошибка] получение постов: {r.status_code}: {r.text[:400]}")
+            sys.exit(f"[ошибка] получение {post_type}: {r.status_code}: {r.text[:400]}")
         batch = r.json()
         if not batch:
             break
-        posts.extend(batch)
+        items.extend(batch)
         total_pages = int(r.headers.get("X-WP-TotalPages", "1"))
         if page >= total_pages:
             break
         page += 1
-    return posts
+    return items
 
 
 def strip_scripts(html):
@@ -129,7 +134,7 @@ def get_featured_alt(post):
     return (embedded[0].get("alt_text") or "").strip()
 
 
-def audit_post(post, min_words):
+def audit_item(post_type, post, min_words):
     title = re.sub(r"<[^>]+>", "", post["title"]["rendered"]).strip()
     content = post["content"]["rendered"]
     meta = post.get("meta", {}) or {}
@@ -148,6 +153,8 @@ def audit_post(post, min_words):
         issues.append("thin_content")
     if not seo_title:
         issues.append("no_seo_title")
+    elif "%%" in seo_title:
+        issues.append("broken_seo_title")
     if not seo_desc:
         issues.append("no_seo_desc")
     if not has_featured:
@@ -164,6 +171,7 @@ def audit_post(post, min_words):
     score = sum(ISSUE_WEIGHTS[i] for i in issues)
 
     return {
+        "type": post_type,
         "id": post["id"],
         "title": title,
         "link": post.get("link", ""),
@@ -187,21 +195,23 @@ def fmt_bool(v, yes="да", no="нет"):
 
 def print_table(rows, min_words):
     headers = [
-        "ID", "Заголовок", "Слов", "SEO title", "SEO desc",
+        "Тип", "ID", "Заголовок", "Слов", "SEO title", "SEO desc",
         "Обложка", "Alt картинок", "H1", "H2", "Скор", "Проблемы",
     ]
-    widths = [6, 40, 6, 9, 9, 8, 12, 4, 4, 5, 40]
+    widths = [5, 6, 35, 6, 9, 9, 8, 12, 4, 4, 5, 40]
 
     def row_cells(r):
         thin = "!" if r["words"] < min_words else ""
         alt_str = f"{r['images_total'] - r['images_no_alt']}/{r['images_total']}"
         if r["images_no_alt"]:
             alt_str += "!"
+        seo_title_cell = "БАГ!" if "broken_seo_title" in r["issues"] else fmt_bool(bool(r["seo_title"]))
         return [
+            r["type"],
             str(r["id"]),
-            (r["title"][:37] + "...") if len(r["title"]) > 40 else r["title"],
+            (r["title"][:32] + "...") if len(r["title"]) > 35 else r["title"],
             f"{r['words']}{thin}",
-            fmt_bool(bool(r["seo_title"])),
+            seo_title_cell,
             fmt_bool(bool(r["seo_desc"])),
             fmt_bool(r["has_featured"]) + ("(!alt)" if r["featured_alt_missing"] else ""),
             alt_str,
@@ -225,13 +235,13 @@ def write_csv(rows, path):
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow([
-            "id", "title", "link", "words", "seo_title", "seo_desc",
+            "type", "id", "title", "link", "words", "seo_title", "seo_desc",
             "has_featured", "featured_alt_missing", "images_total",
             "images_no_alt", "h1_count", "h2_count", "score", "issues",
         ])
         for r in rows:
             w.writerow([
-                r["id"], r["title"], r["link"], r["words"],
+                r["type"], r["id"], r["title"], r["link"], r["words"],
                 r["seo_title"], r["seo_desc"], r["has_featured"],
                 r["featured_alt_missing"], r["images_total"],
                 r["images_no_alt"], r["h1_count"], r["h2_count"],
@@ -246,8 +256,9 @@ def write_json(rows, path):
 
 
 def main():
-    p = argparse.ArgumentParser(description="SEO-аудит опубликованных постов WordPress.")
-    p.add_argument("--status", default="publish", help="статус постов для аудита (по умолчанию publish)")
+    p = argparse.ArgumentParser(description="SEO-аудит опубликованных постов и страниц WordPress.")
+    p.add_argument("--status", default="publish", help="статус записей для аудита (по умолчанию publish)")
+    p.add_argument("--types", default="posts,pages", help="через запятую: posts,pages (по умолчанию оба)")
     p.add_argument("--min-words", type=int, default=800, help="порог тонкого контента в словах")
     p.add_argument("--top", type=int, default=0, help="показать только N самых проблемных (0 = все)")
     p.add_argument("--csv", help="сохранить полный отчёт в CSV")
@@ -262,15 +273,20 @@ def main():
     session.auth = (user, app_pw)
     session.headers.update({"User-Agent": "wp_audit.py"})
 
-    posts = fetch_all_posts(session, base, args.status)
-    if not posts:
-        sys.exit(f"[внимание] постов со статусом '{args.status}' не найдено")
+    post_types = [t.strip() for t in args.types.split(",") if t.strip()]
+    rows = []
+    for post_type in post_types:
+        items = fetch_all(session, base, post_type, args.status)
+        singular = post_type[:-1] if post_type.endswith("s") else post_type
+        rows.extend(audit_item(singular, item, args.min_words) for item in items)
 
-    rows = [audit_post(post, args.min_words) for post in posts]
+    if not rows:
+        sys.exit(f"[внимание] записей со статусом '{args.status}' не найдено ({args.types})")
+
     rows.sort(key=lambda r: r["score"], reverse=True)
 
     shown = rows[: args.top] if args.top else rows
-    print(f"[инфо] всего постов: {len(rows)}, показано: {len(shown)}\n")
+    print(f"[инфо] всего записей: {len(rows)}, показано: {len(shown)}\n")
     print_table(shown, args.min_words)
 
     if args.csv:
