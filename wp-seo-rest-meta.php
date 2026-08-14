@@ -45,4 +45,26 @@ add_action( 'init', function () {
     $register( 'rank_math_title' );
     $register( 'rank_math_description' );
     $register( 'rank_math_focus_keyword' );
+
+    // ACF "Автор публикации" (avtory) — relationship-поле на специалистов,
+    // используется template-parts/content-single.php. avtory хранит массив ID
+    // специалистов, _avtory — служебная ссылка ACF на ключ поля (без неё ACF не
+    // распознает значение как relationship и блок автора не отрисуется).
+    register_post_meta( 'post', 'avtory', array(
+        'type'          => 'array',
+        'single'        => true,
+        'show_in_rest'  => array(
+            'schema' => array(
+                'type'  => 'array',
+                'items' => array( 'type' => 'string' ),
+            ),
+        ),
+        'auth_callback' => $auth,
+    ) );
+    register_post_meta( 'post', '_avtory', array(
+        'type'          => 'string',
+        'single'        => true,
+        'show_in_rest'  => true,
+        'auth_callback' => $auth,
+    ) );
 } );

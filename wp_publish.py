@@ -72,6 +72,13 @@ SEO_META_KEYS = {
     },
 }
 
+# "Автор публикации" (ACF-поле avtory, см. template-parts/content-single.php) —
+# по умолчанию Михайлов Владислав (ID 686, "Ведущий специалист"). _avtory — служебная
+# ссылка ACF на ключ поля, без неё ACF не отрисует блок автора. Оба поля зарегистрированы
+# для REST в wp-seo-rest-meta.php.
+AVTORY_FIELD_KEY = "field_651fe0a99da65"
+DEFAULT_SPECIALIST_ID = "686"
+
 
 def env(name):
     val = os.environ.get(name)
@@ -272,6 +279,11 @@ def main():
     p.add_argument("--image-url", help="URL картинки (скрипт скачает и зальёт)")
     p.add_argument("--image-alt", help="alt-текст обложки (важно для SEO)")
     p.add_argument("--image-caption", help="подпись к обложке")
+    # Автор публикации
+    p.add_argument("--specialist-id", default=DEFAULT_SPECIALIST_ID,
+                   help=f"ID специалиста для блока «Автор публикации» (по умолчанию {DEFAULT_SPECIALIST_ID} — Михайлов Владислав)")
+    p.add_argument("--no-author", action="store_true",
+                   help="не проставлять «Автор публикации» этому посту")
     args = p.parse_args()
 
     if args.image and args.image_url:
@@ -322,6 +334,11 @@ def main():
             targets = [args.seo_plugin]
         for plug in targets:
             meta.update(seo_meta_payload(plug, args.seo_title, args.seo_desc, args.focus_keyword))
+
+    # Автор публикации (по умолчанию — Михайлов Владислав)
+    if not args.no_author:
+        meta["avtory"] = [args.specialist_id]
+        meta["_avtory"] = AVTORY_FIELD_KEY
 
     # Обложка: заливаем в медиатеку и получаем id
     featured_id = None
