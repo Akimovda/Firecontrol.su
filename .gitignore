@@ -1,4 +1,6 @@
 .env
+*.remote
 .DS_Store
 .claude/settings.local.json
 reports/
+feeds/
